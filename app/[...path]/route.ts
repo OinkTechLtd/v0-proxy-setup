@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// CORS Anywhere Proxy с поддержкой HLS видеопотоков
+// CORS Anywhere Proxy с полной поддержкой видеопотоков
 export const runtime = 'edge'
+export const dynamic = 'force-dynamic'
+
+// Увеличиваем таймаут для больших видеофайлов
+export const maxDuration = 60
 
 export async function GET(
   request: NextRequest,
@@ -48,7 +52,7 @@ export async function HEAD(
 export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
     status: 200,
-    headers: getCorsHeaders(request.headers.get('origin')),
+    headers: getCorsHeaders(),
   })
 }
 
@@ -57,14 +61,12 @@ async function handleProxy(
   paramsPromise: Promise<{ path: string[] }>
 ) {
   const { path } = await paramsPromise
-  const origin = request.headers.get('origin')
   
   // Собираем целевой URL из path
   let targetUrl = path.join('/')
   
-  // Добавляем протокол если нет
+  // Исправляем протокол
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-    // Проверяем на https:/ или http:/ (без двойного слэша)
     if (targetUrl.startsWith('https:/')) {
       targetUrl = 'https://' + targetUrl.substring(7)
     } else if (targetUrl.startsWith('http:/')) {
@@ -81,20 +83,29 @@ async function handleProxy(
   }
 
   try {
-    // Формируем заголовки
+    // Формируем заголовки запроса
     const headers = new Headers()
     
-    // Копируем некоторые заголовки
-    const headersToCopy = ['accept', 'accept-language', 'range', 'if-none-match', 'if-modified-since']
+    // Копируем важные заголовки
+    const headersToCopy = [
+      'accept', 
+      'accept-language', 
+      'range',  // Важно для видео - поддержка seek
+      'if-none-match', 
+      'if-modified-since',
+      'if-range'
+    ]
+    
     headersToCopy.forEach(name => {
       const value = request.headers.get(name)
       if (value) headers.set(name, value)
     })
     
-    // Добавляем User-Agent
-    headers.set('User-Agent', request.headers.get('user-agent') || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    // User-Agent
+    headers.set('User-Agent', request.headers.get('user-agent') || 
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    // Получаем тело запроса
+    // Тело запроса для POST/PUT/PATCH
     let body: ArrayBuffer | null = null
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       body = await request.arrayBuffer()
@@ -108,55 +119,86 @@ async function handleProxy(
       redirect: 'follow',
     })
 
-    // Определяем базовый URL для относительных путей в m3u8
+    // Определяем базовый URL для относительных путей
     const urlObj = new URL(targetUrl)
     const baseUrl = urlObj.origin + urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)
-    
-    // Получаем proxy base URL
     const proxyBaseUrl = new URL(request.url).origin
 
     // Формируем заголовки ответа
     const responseHeaders = new Headers()
     
-    // Копируем важные заголовки
+    // Копируем все важные заголовки от исходного сервера
     const headersToForward = [
-      'content-type', 'cache-control', 'expires', 'last-modified', 
-      'etag', 'accept-ranges', 'content-range'
+      'content-type',
+      'content-length',
+      'content-range',
+      'accept-ranges',
+      'cache-control',
+      'expires',
+      'last-modified',
+      'etag',
+      'date',
+      'pragma'
     ]
+    
     headersToForward.forEach(name => {
       const value = response.headers.get(name)
       if (value) responseHeaders.set(name, value)
     })
 
     // Добавляем CORS заголовки
-    Object.entries(getCorsHeaders(origin)).forEach(([key, value]) => {
+    Object.entries(getCorsHeaders()).forEach(([key, value]) => {
       responseHeaders.set(key, value)
     })
 
-    responseHeaders.set('X-Request-URL', targetUrl)
+    // Метаданные прокси
+    responseHeaders.set('X-Proxy-URL', targetUrl)
+    responseHeaders.set('X-Final-URL', response.url)
 
     // Определяем тип контента
     const contentType = response.headers.get('content-type') || ''
-    const isM3U8 = targetUrl.includes('.m3u8') || 
-                   contentType.includes('mpegurl') || 
-                   contentType.includes('x-mpegurl')
+    const lowerUrl = targetUrl.toLowerCase()
     
-    if (isM3U8) {
-      // Обрабатываем M3U8 плейлист - переписываем URL
+    // Проверяем является ли это M3U/M3U8 плейлистом
+    const isPlaylist = lowerUrl.endsWith('.m3u8') || 
+                       lowerUrl.endsWith('.m3u') ||
+                       contentType.includes('mpegurl') || 
+                       contentType.includes('x-mpegurl') ||
+                       contentType.includes('audio/x-mpegurl')
+    
+    if (isPlaylist) {
+      // Обрабатываем плейлист - переписываем URL
       let text = await response.text()
+      text = rewritePlaylist(text, baseUrl, proxyBaseUrl)
       
-      // Переписываем все URL в плейлисте
-      text = rewriteM3U8(text, baseUrl, proxyBaseUrl)
+      // Устанавливаем правильный Content-Type
+      const playlistContentType = lowerUrl.endsWith('.m3u') 
+        ? 'audio/x-mpegurl' 
+        : 'application/vnd.apple.mpegurl'
       
-      responseHeaders.set('Content-Type', 'application/vnd.apple.mpegurl')
+      responseHeaders.set('Content-Type', playlistContentType)
+      responseHeaders.delete('content-length') // Длина изменилась
       
       return new NextResponse(text, {
         status: response.status,
+        statusText: response.statusText,
         headers: responseHeaders,
       })
     }
 
-    // Для остальных файлов (включая .ts сегменты) - стримим напрямую
+    // Для видео/аудио сегментов и обычных видеофайлов - стримим как есть
+    // Это критично для .ts сегментов и обычных mp4/webm видео
+    
+    // Проверяем что есть тело ответа
+    if (!response.body) {
+      return new NextResponse(null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      })
+    }
+
+    // Стримим тело ответа напрямую
     return new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,
@@ -168,64 +210,57 @@ async function handleProxy(
     return NextResponse.json(
       { 
         error: 'Failed to fetch',
-        details: error instanceof Error ? error.message : 'Unknown error',
-        targetUrl 
+        message: error instanceof Error ? error.message : 'Unknown error',
+        url: targetUrl 
       },
       { 
-        status: 500,
-        headers: getCorsHeaders(origin)
+        status: 502,
+        headers: getCorsHeaders()
       }
     )
   }
 }
 
-function rewriteM3U8(content: string, baseUrl: string, proxyBaseUrl: string): string {
+function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string): string {
   const lines = content.split('\n')
   
   return lines.map(line => {
     const trimmed = line.trim()
     
-    // Пропускаем пустые строки и комментарии (кроме URI внутри тегов)
-    if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('URI='))) {
-      // Обрабатываем теги с URI (например #EXT-X-KEY)
-      if (trimmed.includes('URI="')) {
-        return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-          const fullUrl = resolveUrl(uri, baseUrl)
-          return `URI="${proxyBaseUrl}/${fullUrl}"`
-        })
-      }
-      return line
+    // Пустые строки оставляем
+    if (!trimmed) return line
+    
+    // Обрабатываем теги с URI (EXT-X-KEY, EXT-X-MAP, и т.д.)
+    if (trimmed.includes('URI="')) {
+      return line.replace(/URI="([^"]+)"/g, (match, uri) => {
+        const fullUrl = resolveUrl(uri, baseUrl)
+        return `URI="${proxyBaseUrl}/${fullUrl}"`
+      })
     }
     
-    // Если строка начинается с #, но содержит URI
+    // Комментарии и директивы оставляем как есть (кроме тех что выше)
     if (trimmed.startsWith('#')) {
-      if (trimmed.includes('URI="')) {
-        return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-          const fullUrl = resolveUrl(uri, baseUrl)
-          return `URI="${proxyBaseUrl}/${fullUrl}"`
-        })
-      }
       return line
     }
     
-    // Это URL сегмента или плейлиста
+    // Это URL сегмента или вложенного плейлиста
     const fullUrl = resolveUrl(trimmed, baseUrl)
     return `${proxyBaseUrl}/${fullUrl}`
   }).join('\n')
 }
 
 function resolveUrl(url: string, baseUrl: string): string {
-  // Если уже абсолютный URL
+  // Абсолютный URL
   if (url.startsWith('http://') || url.startsWith('https://')) {
     return url
   }
   
-  // Если начинается с //, добавляем протокол
+  // Protocol-relative URL
   if (url.startsWith('//')) {
     return 'https:' + url
   }
   
-  // Если начинается с /, это абсолютный путь от корня домена
+  // Абсолютный путь от корня домена
   if (url.startsWith('/')) {
     const baseUrlObj = new URL(baseUrl)
     return baseUrlObj.origin + url
@@ -235,12 +270,12 @@ function resolveUrl(url: string, baseUrl: string): string {
   return baseUrl + url
 }
 
-function getCorsHeaders(origin: string | null): Record<string, string> {
+function getCorsHeaders(): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': '*',
-    'Access-Control-Expose-Headers': '*',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Content-Type, Accept-Ranges, X-Proxy-URL, X-Final-URL',
     'Access-Control-Max-Age': '86400',
   }
 }

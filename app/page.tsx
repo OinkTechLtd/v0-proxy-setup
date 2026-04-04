@@ -116,21 +116,29 @@ export default function Home() {
         </section>
 
         <section className="space-y-4">
+          <h2 className="text-lg font-semibold text-foreground">Supported Formats:</h2>
+          
+          <ul className="list-disc list-inside space-y-2 text-muted-foreground">
+            <li><strong>HLS streams:</strong> .m3u8 playlists with automatic URL rewriting</li>
+            <li><strong>M3U playlists:</strong> .m3u audio/video playlists</li>
+            <li><strong>Video files:</strong> .mp4, .webm, .ts segments, etc.</li>
+            <li><strong>Audio files:</strong> .mp3, .aac, .ogg, etc.</li>
+            <li><strong>Any HTTP/HTTPS URL:</strong> JSON APIs, images, files, etc.</li>
+          </ul>
+        </section>
+
+        <section className="space-y-4">
           <h2 className="text-lg font-semibold text-foreground">Notes:</h2>
           
           <ul className="list-disc list-inside space-y-2 text-muted-foreground">
             <li>If the protocol is omitted, it defaults to https.</li>
-            <li>Cookies are disabled and stripped from requests.</li>
+            <li>Range requests are supported for video seeking.</li>
+            <li>Redirects are automatically followed.</li>
             <li>
-              Redirects are automatically followed. For debugging purposes, each followed redirect results 
-              in the addition of a <code className="bg-muted px-1 rounded">X-CORS-Redirect-n</code> header, where n starts at 1.
-            </li>
-            <li>After 5 redirects, redirects are not followed any more.</li>
-            <li>
-              The requested URL is available in the <code className="bg-muted px-1 rounded">X-Request-URL</code> response header.
+              The requested URL is available in the <code className="bg-muted px-1 rounded">X-Proxy-URL</code> response header.
             </li>
             <li>
-              The final URL, after following all redirects, is available in the <code className="bg-muted px-1 rounded">X-Final-URL</code> response header.
+              The final URL is available in the <code className="bg-muted px-1 rounded">X-Final-URL</code> response header.
             </li>
           </ul>
         </section>
