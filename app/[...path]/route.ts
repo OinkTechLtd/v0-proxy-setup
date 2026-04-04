@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// CORS Anywhere Proxy с полной поддержкой видеопотоков
+// CORS Anywhere Proxy для HLS и видеопотоков
 export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
-
-// Увеличиваем таймаут для больших видеофайлов
 export const maxDuration = 60
 
 export async function GET(
@@ -90,7 +88,7 @@ async function handleProxy(
     const headersToCopy = [
       'accept', 
       'accept-language', 
-      'range',  // Важно для видео - поддержка seek
+      'range',
       'if-none-match', 
       'if-modified-since',
       'if-range'
@@ -101,7 +99,6 @@ async function handleProxy(
       if (value) headers.set(name, value)
     })
     
-    // User-Agent
     headers.set('User-Agent', request.headers.get('user-agent') || 
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
@@ -133,12 +130,9 @@ async function handleProxy(
       'content-length',
       'content-range',
       'accept-ranges',
-      'cache-control',
-      'expires',
       'last-modified',
       'etag',
-      'date',
-      'pragma'
+      'date'
     ]
     
     headersToForward.forEach(name => {
@@ -167,6 +161,11 @@ async function handleProxy(
                        contentType.includes('audio/x-mpegurl')
     
     if (isPlaylist) {
+      // Для live HLS - отключаем кеширование чтобы плеер мог получать обновления
+      responseHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate')
+      responseHeaders.set('Pragma', 'no-cache')
+      responseHeaders.set('Expires', '0')
+      
       // Обрабатываем плейлист - переписываем URL
       let text = await response.text()
       text = rewritePlaylist(text, baseUrl, proxyBaseUrl)
@@ -177,7 +176,7 @@ async function handleProxy(
         : 'application/vnd.apple.mpegurl'
       
       responseHeaders.set('Content-Type', playlistContentType)
-      responseHeaders.delete('content-length') // Длина изменилась
+      responseHeaders.delete('content-length')
       
       return new NextResponse(text, {
         status: response.status,
@@ -186,9 +185,29 @@ async function handleProxy(
       })
     }
 
-    // Для видео/аудио сегментов и обычных видеофайлов - стримим как есть
-    // Это критично для .ts сегментов и обычных mp4/webm видео
+    // Для .ts сегментов - разрешаем кеширование на короткое время
+    const isSegment = lowerUrl.endsWith('.ts') || 
+                      lowerUrl.endsWith('.aac') || 
+                      lowerUrl.endsWith('.m4s') ||
+                      lowerUrl.endsWith('.fmp4')
     
+    if (isSegment) {
+      // Кешируем сегменты на 5 минут - они не меняются после создания
+      responseHeaders.set('Cache-Control', 'public, max-age=300')
+    }
+
+    // Для видеофайлов
+    const isVideo = lowerUrl.endsWith('.mp4') || 
+                    lowerUrl.endsWith('.webm') || 
+                    lowerUrl.endsWith('.mkv') ||
+                    lowerUrl.endsWith('.avi') ||
+                    lowerUrl.endsWith('.mov')
+    
+    if (isVideo) {
+      // Поддержка Range requests для seek
+      responseHeaders.set('Accept-Ranges', 'bytes')
+    }
+
     // Проверяем что есть тело ответа
     if (!response.body) {
       return new NextResponse(null, {
@@ -238,7 +257,7 @@ function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string)
       })
     }
     
-    // Комментарии и директивы оставляем как есть (кроме тех что выше)
+    // Комментарии и директивы оставляем как есть
     if (trimmed.startsWith('#')) {
       return line
     }
