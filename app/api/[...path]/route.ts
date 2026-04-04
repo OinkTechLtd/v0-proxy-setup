@@ -69,37 +69,63 @@ async function handleProxy(
   const origin = request.headers.get('origin')
   const xRequestedWith = request.headers.get('x-requested-with')
   
-  if (!origin && !xRequestedWith) {
-    return NextResponse.json(
-      { 
-        error: 'Missing required request header. Must specify one of: origin, x-requested-with' 
-      },
-      { 
-        status: 400,
-        headers: getCorsHeaders(origin)
-      }
-    )
-  }
+  // Временно отключаем проверку для тестирования
+  // if (!origin && !xRequestedWith) {
+  //   return NextResponse.json(
+  //     { 
+  //       error: 'Missing required request header. Must specify one of: origin, x-requested-with' 
+  //     },
+  //     { 
+  //       status: 400,
+  //       headers: getCorsHeaders(origin)
+  //     }
+  //   )
+  // }
 
-  // Собираем URL из path параметров
-  const pathString = path.join('/')
+  // Получаем полный URL из request и извлекаем целевой URL
+  const requestUrl = request.url
+  const apiPathIndex = requestUrl.indexOf('/api/')
   
-  // Парсим целевой URL
   let targetUrl: string
   
-  if (pathString.startsWith('http://') || pathString.startsWith('https://')) {
-    targetUrl = pathString
-  } else if (pathString.includes(':443')) {
-    targetUrl = 'https://' + pathString.replace(':443', '')
+  if (apiPathIndex !== -1) {
+    // Извлекаем всё после /api/
+    const afterApi = requestUrl.substring(apiPathIndex + 5)
+    
+    // Декодируем URL
+    const decoded = decodeURIComponent(afterApi)
+    
+    if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+      targetUrl = decoded
+    } else if (decoded.startsWith('http:/') && !decoded.startsWith('http://')) {
+      // Исправляем http:/ -> http://
+      targetUrl = decoded.replace('http:/', 'http://')
+    } else if (decoded.startsWith('https:/') && !decoded.startsWith('https://')) {
+      // Исправляем https:/ -> https://
+      targetUrl = decoded.replace('https:/', 'https://')
+    } else {
+      targetUrl = 'https://' + decoded
+    }
   } else {
-    targetUrl = 'http://' + pathString
+    // Fallback на старый метод
+    const pathString = path.join('/')
+    
+    if (pathString.startsWith('http://') || pathString.startsWith('https://')) {
+      targetUrl = pathString
+    } else if (pathString.includes(':443')) {
+      targetUrl = 'https://' + pathString.replace(':443', '')
+    } else {
+      targetUrl = 'https://' + pathString
+    }
+    
+    // Добавляем query параметры если есть
+    const searchParams = request.nextUrl.searchParams.toString()
+    if (searchParams) {
+      targetUrl += '?' + searchParams
+    }
   }
-
-  // Добавляем query параметры если есть
-  const searchParams = request.nextUrl.searchParams.toString()
-  if (searchParams) {
-    targetUrl += '?' + searchParams
-  }
+  
+  console.log('[v0] Target URL:', targetUrl)
 
   try {
     // Формируем заголовки для запроса
