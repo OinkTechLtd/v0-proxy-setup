@@ -14,14 +14,9 @@ export default function Home() {
     setResult(null)
     
     try {
-      const proxyUrl = `/api/${testUrl}`
-      console.log('[v0] Testing proxy with URL:', proxyUrl)
+      const proxyUrl = `/${testUrl}`
       
-      const response = await fetch(proxyUrl, {
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
-      })
+      const response = await fetch(proxyUrl)
       
       const text = await response.text()
       
@@ -99,7 +94,7 @@ export default function Home() {
               <code className="bg-muted px-2 py-1 rounded">/iscorsneeded</code> This is the only resource on this host which is served without CORS headers.
             </p>
             <p>
-              <code className="bg-muted px-2 py-1 rounded">/api/&lt;url&gt;</code> Create a request to &lt;url&gt;, and includes CORS headers in the response.
+              <code className="bg-muted px-2 py-1 rounded">/&lt;url&gt;</code> Create a request to &lt;url&gt;, and includes CORS headers in the response.
             </p>
           </div>
         </section>
@@ -109,10 +104,13 @@ export default function Home() {
           
           <div className="space-y-2">
             <code className="block bg-muted px-3 py-2 rounded text-foreground break-all">
-              /api/https://api.example.com/data
+              /https://api.example.com/data
             </code>
             <code className="block bg-muted px-3 py-2 rounded text-foreground break-all">
-              /api/https://httpbin.org/get
+              /https://httpbin.org/get
+            </code>
+            <code className="block bg-muted px-3 py-2 rounded text-foreground break-all">
+              /livetv.mylifeisgood.net.ru/channels/strvf.m3u8
             </code>
           </div>
         </section>
@@ -141,14 +139,14 @@ export default function Home() {
           <h2 className="text-lg font-semibold text-foreground">JavaScript Example:</h2>
           
           <pre className="bg-muted px-4 py-3 rounded overflow-x-auto text-foreground">
-{`fetch('/api/https://api.example.com/data', {
-  headers: {
-    'X-Requested-With': 'XMLHttpRequest'
-  }
-})
+{`// For JSON data
+fetch('/https://api.example.com/data')
   .then(response => response.json())
-  .then(data => console.log(data))
-  .catch(error => console.error('Error:', error));`}
+  .then(data => console.log(data));
+
+// For HLS video stream
+const videoUrl = '/livetv.mylifeisgood.net.ru/channels/strvf.m3u8';
+// Use with HLS.js or native HLS player`}
           </pre>
         </section>
 
