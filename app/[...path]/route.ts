@@ -123,20 +123,7 @@ async function handleProxy(
     
     // Определяем базовый URL прокси
     // ВАЖНО: На кастомных хостингах (Yandex Cloud, и т.д.) установите PROXY_BASE_URL
-    let proxyBaseUrl = process.env.PROXY_BASE_URL
-    
-    if (!proxyBaseUrl) {
-      // Автоопределение для Vercel и других платформ
-      const forwardedHost = request.headers.get('x-forwarded-host')
-      const host = request.headers.get('host')
-      const forwardedProto = request.headers.get('x-forwarded-proto')
-      const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
-      const proxyHost = forwardedHost || host || new URL(request.url).host
-      proxyBaseUrl = `${protocol}://${proxyHost}`
-    }
-    
-    // Убираем trailing slash если есть
-    proxyBaseUrl = proxyBaseUrl.replace(/\/$/, '')
+    const proxyBaseUrl = resolveProxyBaseUrl(request)
 
     // Формируем заголовки ответа
     const responseHeaders = new Headers()
@@ -313,4 +300,30 @@ function getCorsHeaders(): Record<string, string> {
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Content-Type, Accept-Ranges, X-Proxy-URL, X-Final-URL',
     'Access-Control-Max-Age': '86400',
   }
+}
+
+
+function resolveForwardedValue(value: string | null): string | null {
+  if (!value) return null
+
+  const first = value.split(',')[0]?.trim()
+  return first || null
+}
+
+function resolveProxyBaseUrl(request: NextRequest): string {
+  const envBase = process.env.PROXY_BASE_URL?.trim()
+
+  if (envBase) {
+    return envBase.replace(/\/$/, '')
+  }
+
+  // На разных платформах X-Forwarded-* может содержать несколько значений через запятую
+  const forwardedHost = resolveForwardedValue(request.headers.get('x-forwarded-host'))
+  const host = resolveForwardedValue(request.headers.get('host'))
+  const forwardedProto = resolveForwardedValue(request.headers.get('x-forwarded-proto'))
+
+  const protocol = forwardedProto || new URL(request.url).protocol.replace(':', '') || 'https'
+  const proxyHost = forwardedHost || host || new URL(request.url).host
+
+  return `${protocol}://${proxyHost}`.replace(/\/$/, '')
 }

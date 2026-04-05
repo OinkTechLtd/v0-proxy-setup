@@ -24,16 +24,7 @@ export async function GET(request: NextRequest) {
   })
   
   // Определяем конечный proxy base URL
-  let proxyBaseUrl = process.env.PROXY_BASE_URL
-  
-  if (!proxyBaseUrl) {
-    const forwardedHost = request.headers.get('x-forwarded-host')
-    const host = request.headers.get('host')
-    const forwardedProto = request.headers.get('x-forwarded-proto')
-    const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
-    const proxyHost = forwardedHost || host || new URL(request.url).host
-    proxyBaseUrl = `${protocol}://${proxyHost}`
-  }
+  const proxyBaseUrl = resolveProxyBaseUrl(request)
   
   return NextResponse.json({
     status: 'ok',
@@ -56,4 +47,29 @@ export async function GET(request: NextRequest) {
       'Cache-Control': 'no-cache'
     }
   })
+}
+
+
+function resolveForwardedValue(value: string | null): string | null {
+  if (!value) return null
+
+  const first = value.split(',')[0]?.trim()
+  return first || null
+}
+
+function resolveProxyBaseUrl(request: NextRequest): string {
+  const envBase = process.env.PROXY_BASE_URL?.trim()
+
+  if (envBase) {
+    return envBase.replace(/\/$/, '')
+  }
+
+  const forwardedHost = resolveForwardedValue(request.headers.get('x-forwarded-host'))
+  const host = resolveForwardedValue(request.headers.get('host'))
+  const forwardedProto = resolveForwardedValue(request.headers.get('x-forwarded-proto'))
+
+  const protocol = forwardedProto || new URL(request.url).protocol.replace(':', '') || 'https'
+  const proxyHost = forwardedHost || host || new URL(request.url).host
+
+  return `${protocol}://${proxyHost}`.replace(/\/$/, '')
 }
