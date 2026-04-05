@@ -24,33 +24,32 @@ export async function GET(request: NextRequest) {
   })
   
   // Определяем конечный proxy base URL
-  const forwardedHost = request.headers.get('x-forwarded-host')
-  const originalHost = request.headers.get('x-original-host')
-  const host = request.headers.get('host')
-  const forwardedProto = request.headers.get('x-forwarded-proto')
-  const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
+  let proxyBaseUrl = process.env.PROXY_BASE_URL
   
-  let proxyHost = forwardedHost || originalHost || host
-  if (!proxyHost) {
-    try {
-      proxyHost = new URL(request.url).host
-    } catch {
-      proxyHost = 'localhost'
-    }
+  if (!proxyBaseUrl) {
+    const forwardedHost = request.headers.get('x-forwarded-host')
+    const host = request.headers.get('host')
+    const forwardedProto = request.headers.get('x-forwarded-proto')
+    const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
+    const proxyHost = forwardedHost || host || new URL(request.url).host
+    proxyBaseUrl = `${protocol}://${proxyHost}`
   }
-  
-  const proxyBaseUrl = `${protocol}://${proxyHost}`
   
   return NextResponse.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     requestUrl: request.url,
     resolvedProxyBaseUrl: proxyBaseUrl,
+    proxyBaseUrlSource: process.env.PROXY_BASE_URL ? 'PROXY_BASE_URL env var' : 'auto-detected from headers',
     headers,
     env: {
       nodeEnv: process.env.NODE_ENV,
       vercel: !!process.env.VERCEL,
-    }
+      proxyBaseUrlEnv: process.env.PROXY_BASE_URL || '(not set)',
+    },
+    instructions: !process.env.PROXY_BASE_URL ? 
+      'Set PROXY_BASE_URL environment variable to fix custom domain issues. Example: PROXY_BASE_URL=https://your-domain.com' : 
+      'PROXY_BASE_URL is configured correctly'
   }, {
     headers: {
       'Access-Control-Allow-Origin': '*',

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 // CORS Anywhere Proxy для HLS и видеопотоков
-// Используем Node.js runtime для совместимости с Yandex Cloud и другими хостингами
+// Для кастомных доменов установите PROXY_BASE_URL в переменных окружения
+// Например: PROXY_BASE_URL=https://proxyvideo.tatnet.app
+export const runtime = 'edge'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
-export const fetchCache = 'force-no-store'
 
 export async function GET(
   request: NextRequest,
@@ -59,14 +59,10 @@ async function handleProxy(
   request: NextRequest,
   paramsPromise: Promise<{ path: string[] }>
 ) {
-  const startTime = Date.now()
   const { path } = await paramsPromise
   
   // Собираем целевой URL из path
   let targetUrl = path.join('/')
-  
-  // Логируем для диагностики
-  console.log(`[Proxy] ${request.method} ${targetUrl.substring(0, 100)}...`)
   
   // Исправляем протокол
   if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
@@ -125,25 +121,22 @@ async function handleProxy(
     const urlObj = new URL(targetUrl)
     const baseUrl = urlObj.origin + urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)
     
-    // Определяем базовый URL прокси - проверяем разные заголовки для совместимости
-    // с Vercel, Yandex Cloud, и другими хостингами
-    const forwardedHost = request.headers.get('x-forwarded-host')
-    const originalHost = request.headers.get('x-original-host')
-    const host = request.headers.get('host')
-    const forwardedProto = request.headers.get('x-forwarded-proto')
-    const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
+    // Определяем базовый URL прокси
+    // ВАЖНО: На кастомных хостингах (Yandex Cloud, и т.д.) установите PROXY_BASE_URL
+    let proxyBaseUrl = process.env.PROXY_BASE_URL
     
-    // Определяем хост в порядке приоритета
-    let proxyHost = forwardedHost || originalHost || host
-    if (!proxyHost) {
-      try {
-        proxyHost = new URL(request.url).host
-      } catch {
-        proxyHost = 'localhost'
-      }
+    if (!proxyBaseUrl) {
+      // Автоопределение для Vercel и других платформ
+      const forwardedHost = request.headers.get('x-forwarded-host')
+      const host = request.headers.get('host')
+      const forwardedProto = request.headers.get('x-forwarded-proto')
+      const protocol = forwardedProto?.split(',')[0]?.trim() || 'https'
+      const proxyHost = forwardedHost || host || new URL(request.url).host
+      proxyBaseUrl = `${protocol}://${proxyHost}`
     }
     
-    const proxyBaseUrl = `${protocol}://${proxyHost}`
+    // Убираем trailing slash если есть
+    proxyBaseUrl = proxyBaseUrl.replace(/\/$/, '')
 
     // Формируем заголовки ответа
     const responseHeaders = new Headers()
@@ -249,8 +242,6 @@ async function handleProxy(
     })
 
   } catch (error) {
-    const elapsed = Date.now() - startTime
-    console.error(`[Proxy] Error after ${elapsed}ms:`, error)
     return NextResponse.json(
       { 
         error: 'Failed to fetch',
