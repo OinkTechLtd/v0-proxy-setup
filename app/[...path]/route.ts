@@ -119,7 +119,13 @@ async function handleProxy(
     // Определяем базовый URL для относительных путей
     const urlObj = new URL(targetUrl)
     const baseUrl = urlObj.origin + urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)
-    const proxyBaseUrl = new URL(request.url).origin
+    
+    // Определяем базовый URL прокси - используем host заголовок для поддержки кастомных доменов
+    const forwardedHost = request.headers.get('x-forwarded-host')
+    const host = request.headers.get('host')
+    const protocol = request.headers.get('x-forwarded-proto') || 'https'
+    const proxyHost = forwardedHost || host || new URL(request.url).host
+    const proxyBaseUrl = `${protocol}://${proxyHost}`
 
     // Формируем заголовки ответа
     const responseHeaders = new Headers()
