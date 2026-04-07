@@ -183,7 +183,7 @@ async function handleProxy(
       
       // Обрабатываем плейлист - переписываем URL
       let text = await response.text()
-      text = rewritePlaylist(text, baseUrl, proxyBaseUrl)
+      text = rewritePlaylist(text, baseUrl, proxyBaseUrl, originHeader, refererHeader)
       
       // Устанавливаем правильный Content-Type
       const playlistContentType = lowerUrl.endsWith('.m3u') 
@@ -351,6 +351,8 @@ function rewritePlaylist(
   content: string,
   baseUrl: string,
   proxyBaseUrl: string,
+  upstreamOrigin: string,
+  upstreamReferer: string,
 ): string {
   const lines = content.split('\n')
   
@@ -364,7 +366,7 @@ function rewritePlaylist(
     if (trimmed.includes('URI="')) {
       return line.replace(/URI="([^"]+)"/g, (_match, uri) => {
         const fullUrl = resolveUrl(uri, baseUrl)
-        return `URI="${buildProxyUrl(fullUrl, proxyBaseUrl)}"`
+        return `URI="${buildProxyUrl(fullUrl, proxyBaseUrl, upstreamOrigin, upstreamReferer)}"`
       })
     }
     
@@ -375,21 +377,14 @@ function rewritePlaylist(
     
     // Это URL сегмента или вложенного плейлиста
     const fullUrl = resolveUrl(trimmed, baseUrl)
-    return buildProxyUrl(fullUrl, proxyBaseUrl)
+    return buildProxyUrl(fullUrl, proxyBaseUrl, upstreamOrigin, upstreamReferer)
   }).join('\n')
 }
 
-function buildProxyUrl(targetUrl: string, proxyBaseUrl: string): string {
+function buildProxyUrl(targetUrl: string, proxyBaseUrl: string, origin: string, referer: string): string {
   const proxied = new URL(`${proxyBaseUrl}/${targetUrl}`)
-
-  try {
-    const upstreamUrl = new URL(targetUrl)
-    proxied.searchParams.set('_proxy_origin', upstreamUrl.origin)
-    proxied.searchParams.set('_proxy_referer', `${upstreamUrl.origin}/`)
-  } catch {
-    // fallback: оставляем URL без подсказок, handleProxy подставит origin/referer автоматически
-  }
-
+  proxied.searchParams.set('_proxy_origin', origin)
+  proxied.searchParams.set('_proxy_referer', referer)
   return proxied.toString()
 }
 
