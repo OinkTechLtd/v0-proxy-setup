@@ -75,10 +75,10 @@ async function handleProxy(
     }
   }
   
-  // Добавляем query параметры
-  const searchParams = request.nextUrl.searchParams.toString()
-  if (searchParams) {
-    targetUrl += (targetUrl.includes('?') ? '&' : '?') + searchParams
+  // Добавляем query-параметры, исключая служебные параметры прокси
+  const passthroughQuery = buildPassthroughQuery(request.nextUrl.searchParams)
+  if (passthroughQuery) {
+    targetUrl += (targetUrl.includes('?') ? '&' : '?') + passthroughQuery
   }
 
   try {
@@ -109,8 +109,8 @@ async function handleProxy(
       body = await request.arrayBuffer()
     }
 
-    // Выполняем запрос
-    const response = await fetch(targetUrl, {
+    // Выполняем запрос с retry для временных сбоев сети
+    const response = await fetchWithRetry(targetUrl, {
       method: request.method,
       headers,
       body,
@@ -241,6 +241,73 @@ async function handleProxy(
       }
     )
   }
+}
+
+function buildPassthroughQuery(searchParams: URLSearchParams): string {
+  const proxiedParams = new URLSearchParams()
+
+  // Некоторые клиенты передают URL в ?path=... или ?url=...
+  // Эти параметры нужны самому клиенту и не должны пробрасываться на upstream.
+  const internalKeys = new Set(['path', 'url'])
+
+  searchParams.forEach((value, key) => {
+    if (!internalKeys.has(key.toLowerCase())) {
+      proxiedParams.append(key, value)
+    }
+  })
+
+  return proxiedParams.toString()
+}
+
+async function fetchWithRetry(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  const attempts = 3
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(`Timeout at attempt ${attempt}`), 15000)
+
+    try {
+      const response = await fetch(input, {
+        ...init,
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (!isRetryableStatus(response.status) || attempt === attempts) {
+        return response
+      }
+    } catch (error) {
+      clearTimeout(timeout)
+
+      if (attempt === attempts || !isRetryableError(error)) {
+        throw error
+      }
+    }
+
+    await wait(attempt * 300)
+  }
+
+  throw new Error('Failed to fetch after retries')
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599)
+}
+
+function isRetryableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.name === 'AbortError' ||
+    error.name === 'TypeError' ||
+    error.message.toLowerCase().includes('network')
+  )
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string): string {
