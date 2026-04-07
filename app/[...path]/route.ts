@@ -75,6 +75,9 @@ async function handleProxy(
     }
   }
   
+  // Служебные параметры прокси для управления upstream-заголовками
+  const upstreamHeaderHints = extractUpstreamHeaderHints(request.nextUrl.searchParams)
+
   // Добавляем query-параметры, исключая служебные параметры прокси
   const passthroughQuery = buildPassthroughQuery(request.nextUrl.searchParams)
   if (passthroughQuery) {
@@ -102,6 +105,14 @@ async function handleProxy(
     
     headers.set('User-Agent', request.headers.get('user-agent') || 
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    // Многие видеохостинги валидируют Origin/Referer (anti-hotlink)
+    const targetOrigin = new URL(targetUrl).origin
+    const originHeader = upstreamHeaderHints.origin || request.headers.get('origin') || targetOrigin
+    const refererHeader = upstreamHeaderHints.referer || request.headers.get('referer') || `${targetOrigin}/`
+
+    headers.set('Origin', originHeader)
+    headers.set('Referer', refererHeader)
 
     // Тело запроса для POST/PUT/PATCH
     let body: ArrayBuffer | null = null
@@ -172,7 +183,7 @@ async function handleProxy(
       
       // Обрабатываем плейлист - переписываем URL
       let text = await response.text()
-      text = rewritePlaylist(text, baseUrl, proxyBaseUrl)
+      text = rewritePlaylist(text, baseUrl, proxyBaseUrl, urlObj.origin, targetUrl)
       
       // Устанавливаем правильный Content-Type
       const playlistContentType = lowerUrl.endsWith('.m3u') 
@@ -243,15 +254,41 @@ async function handleProxy(
   }
 }
 
+
+const INTERNAL_QUERY_KEYS = new Set(['path', 'url', '_proxy_origin', '_proxy_referer'])
+
+function extractUpstreamHeaderHints(searchParams: URLSearchParams): { origin: string | null, referer: string | null } {
+  const origin = normalizeHttpUrl(searchParams.get('_proxy_origin'), false)
+  const referer = normalizeHttpUrl(searchParams.get('_proxy_referer'), true)
+
+  return { origin, referer }
+}
+
+function normalizeHttpUrl(value: string | null, ensureTrailingSlash: boolean): string | null {
+  if (!value) return null
+
+  try {
+    const url = new URL(value)
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return null
+    }
+
+    if (ensureTrailingSlash && !url.pathname) {
+      url.pathname = '/'
+    }
+
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
 function buildPassthroughQuery(searchParams: URLSearchParams): string {
   const proxiedParams = new URLSearchParams()
 
-  // Некоторые клиенты передают URL в ?path=... или ?url=...
-  // Эти параметры нужны самому клиенту и не должны пробрасываться на upstream.
-  const internalKeys = new Set(['path', 'url'])
-
   searchParams.forEach((value, key) => {
-    if (!internalKeys.has(key.toLowerCase())) {
+    if (!INTERNAL_QUERY_KEYS.has(key.toLowerCase())) {
       proxiedParams.append(key, value)
     }
   })
@@ -310,7 +347,13 @@ function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string): string {
+function rewritePlaylist(
+  content: string,
+  baseUrl: string,
+  proxyBaseUrl: string,
+  upstreamOrigin: string,
+  upstreamReferer: string,
+): string {
   const lines = content.split('\n')
   
   return lines.map(line => {
@@ -321,9 +364,9 @@ function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string)
     
     // Обрабатываем теги с URI (EXT-X-KEY, EXT-X-MAP, и т.д.)
     if (trimmed.includes('URI="')) {
-      return line.replace(/URI="([^"]+)"/g, (match, uri) => {
+      return line.replace(/URI="([^"]+)"/g, (_match, uri) => {
         const fullUrl = resolveUrl(uri, baseUrl)
-        return `URI="${proxyBaseUrl}/${fullUrl}"`
+        return `URI="${buildProxyUrl(fullUrl, proxyBaseUrl, upstreamOrigin, upstreamReferer)}"`
       })
     }
     
@@ -334,8 +377,15 @@ function rewritePlaylist(content: string, baseUrl: string, proxyBaseUrl: string)
     
     // Это URL сегмента или вложенного плейлиста
     const fullUrl = resolveUrl(trimmed, baseUrl)
-    return `${proxyBaseUrl}/${fullUrl}`
+    return buildProxyUrl(fullUrl, proxyBaseUrl, upstreamOrigin, upstreamReferer)
   }).join('\n')
+}
+
+function buildProxyUrl(targetUrl: string, proxyBaseUrl: string, origin: string, referer: string): string {
+  const proxied = new URL(`${proxyBaseUrl}/${targetUrl}`)
+  proxied.searchParams.set('_proxy_origin', origin)
+  proxied.searchParams.set('_proxy_referer', referer)
+  return proxied.toString()
 }
 
 function resolveUrl(url: string, baseUrl: string): string {
