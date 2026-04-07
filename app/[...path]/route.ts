@@ -117,10 +117,9 @@ async function handleProxy(
       redirect: 'follow',
     })
 
-    // Определяем базовый URL для относительных путей.
-    // Важно использовать final URL после redirect, иначе relative URI из плейлиста ломаются.
-    const finalUrlObj = new URL(response.url || targetUrl)
-    const baseUrl = new URL('.', finalUrlObj).toString()
+    // Определяем базовый URL для относительных путей
+    const urlObj = new URL(targetUrl)
+    const baseUrl = urlObj.origin + urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1)
     
     // Определяем базовый URL прокси
     // ВАЖНО: На кастомных хостингах (Yandex Cloud, и т.д.) установите PROXY_BASE_URL
@@ -344,15 +343,20 @@ function resolveUrl(url: string, baseUrl: string): string {
   if (url.startsWith('http://') || url.startsWith('https://')) {
     return url
   }
-
+  
   // Protocol-relative URL
   if (url.startsWith('//')) {
     return 'https:' + url
   }
-
-  // Универсальное и RFC-совместимое разрешение относительных путей:
-  // поддерживает ../, ./, query-only (?token=...), hash и абсолютные пути.
-  return new URL(url, baseUrl).toString()
+  
+  // Абсолютный путь от корня домена
+  if (url.startsWith('/')) {
+    const baseUrlObj = new URL(baseUrl)
+    return baseUrlObj.origin + url
+  }
+  
+  // Относительный путь
+  return baseUrl + url
 }
 
 function getCorsHeaders(): Record<string, string> {
